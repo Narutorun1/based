@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+   #!/usr/bin/env python3
 
 import os
 import sys
@@ -29,10 +29,18 @@ warnings.filterwarnings('ignore', category=UserWarning, module='torchvision')
 def parse_args() -> None:
     signal.signal(signal.SIGINT, lambda signal_number, frame: destroy())
     program = argparse.ArgumentParser(formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=100))
-    program.add_argument('-s', '--source', help='select an source image', dest='source_path')
-    program.add_argument('-t', '--target', help='select an target image or video', dest='target_path')
-    program.add_argument('-o', '--output', help='select output file or directory', dest='output_path')
-    program.add_argument('--frame-processor', help='frame processors (choices: face_swapper, face_enhancer, ...)', dest='frame_processor', default=['face_swapper'], nargs='+')
+    
+    # Path-related arguments
+    program.add_argument('-s', '--source', help='select an source image', dest='source_path', required=True)
+    program.add_argument('-t', '--target', help='select an target image or video', dest='target_path', required=True)
+    program.add_argument('-o', '--output', help='select output file or directory', dest='output_path', required=True)
+    
+    # Frame processor argument
+    program.add_argument('--frame-processor', help='frame processors (choices: face_swapper, face_enhancer, ...)', 
+                         dest='frame_processor', default=['face_swapper'], nargs='+', 
+                         choices=['face_swapper', 'face_enhancer'])
+    
+    # Existing options from README
     program.add_argument('--keep-fps', help='keep target fps', dest='keep_fps', action='store_true')
     program.add_argument('--keep-frames', help='keep temporary frames', dest='keep_frames', action='store_true')
     program.add_argument('--skip-audio', help='skip target audio', dest='skip_audio', action='store_true')
@@ -41,20 +49,52 @@ def parse_args() -> None:
     program.add_argument('--reference-frame-number', help='number of the reference frame', dest='reference_frame_number', type=int, default=0)
     program.add_argument('--similar-face-distance', help='face distance used for recognition', dest='similar_face_distance', type=float, default=0.85)
     program.add_argument('--temp-frame-format', help='image format used for frame extraction', dest='temp_frame_format', default='png', choices=['jpg', 'png'])
-    program.add_argument('--temp-frame-quality', help='image quality used for frame extraction', dest='temp_frame_quality', type=int, default=0, choices=range(101), metavar='[0-100]')
+    program.add_argument('--temp-frame-quality', help='image quality for frame extraction', dest='temp_frame_quality', type=int, default=0, choices=range(101), metavar='[0-100]')
     program.add_argument('--output-video-encoder', help='encoder used for the output video', dest='output_video_encoder', default='libx264', choices=['libx264', 'libx265', 'libvpx-vp9', 'h264_nvenc', 'hevc_nvenc'])
     program.add_argument('--output-video-quality', help='quality used for the output video', dest='output_video_quality', type=int, default=35, choices=range(101), metavar='[0-100]')
     program.add_argument('--max-memory', help='maximum amount of RAM in GB', dest='max_memory', type=int)
-    program.add_argument('--execution-provider', help='available execution provider (choices: cpu, ...)', dest='execution_provider', default=['cpu'], choices=suggest_execution_providers(), nargs='+')
+    program.add_argument('--execution-provider', help='available execution provider', dest='execution_provider', default=['cpu'], choices=suggest_execution_providers(), nargs='+')
     program.add_argument('--execution-threads', help='number of execution threads', dest='execution_threads', type=int, default=suggest_execution_threads())
     program.add_argument('-v', '--version', action='version', version=f'{roop.metadata.name} {roop.metadata.version}')
+    
+    # New arguments from updates
+    program.add_argument('--occlusion_threshold', type=float, default=0.6, help='Skip occluded faces (e.g., hands, 0.0-1.0)')
+    program.add_argument('--side_pose_adjust', action='store_true', help='Adjust for side profile orientations')
+    program.add_argument('--face_tracking', action='store_true', help='Enable basic multi-face tracking')
+    program.add_argument('--max_faces', type=int, default=1, help='Max faces to track (up to 10)')
+    program.add_argument('--refine_landmarks', action='store_true', help='Use detailed 3D landmarks')
+    program.add_argument('--deform_threshold', type=float, default=0.3, help='Skip extreme mouth deformations (0.0-1.0)')
+    program.add_argument('--mouth_mask', action='store_true', help='Preserve original mouth for oral scenes')
+    program.add_argument('--erode_mask', type=float, default=0.2, help='Erosion factor for mask edges (0.0-1.0)')
+    program.add_argument('--enhance_faces', action='store_true', help='Enable face enhancement with GFPGAN')
 
     args = program.parse_args()
 
+    # Validate paths
+    if not os.path.exists(args.source_path):
+        program.error(f"Source path '{args.source_path}' does not exist.")
+    if not is_image(args.source_path):
+        program.error(f"Source path '{args.source_path}' is not a valid image.")
+    if not os.path.exists(args.target_path):
+        program.error(f"Target path '{args.target_path}' does not exist.")
+    if not (is_image(args.target_path) or is_video(args.target_path)):
+        program.error(f"Target path '{args.target_path}' is not a valid image or video.")
+    
+    # Normalize and validate output path
+    output_path = normalize_output_path(args.source_path, args.target_path, args.output_path)
+    if is_image(args.target_path) or is_video(args.target_path):
+        if os.path.isdir(output_path):
+            output_path = os.path.join(output_path, 'output.mp4')  # Default if directory
+    else:
+        os.makedirs(output_path, exist_ok=True)
+    if os.path.exists(output_path) and not args.keep_frames:
+        program.error(f"Output path '{output_path}' already exists. Use --keep-frames to overwrite.")
+
+    # Store args in globals
     roop.globals.source_path = args.source_path
     roop.globals.target_path = args.target_path
-    roop.globals.output_path = normalize_output_path(roop.globals.source_path, roop.globals.target_path, args.output_path)
-    roop.globals.headless = roop.globals.source_path is not None and roop.globals.target_path is not None and roop.globals.output_path is not None
+    roop.globals.output_path = output_path
+    roop.globals.headless = args.source_path is not None and args.target_path is not None and args.output_path is not None
     roop.globals.frame_processors = args.frame_processor
     roop.globals.keep_fps = args.keep_fps
     roop.globals.keep_frames = args.keep_frames
@@ -70,6 +110,16 @@ def parse_args() -> None:
     roop.globals.max_memory = args.max_memory
     roop.globals.execution_providers = decode_execution_providers(args.execution_provider)
     roop.globals.execution_threads = args.execution_threads
+    # New globals
+    roop.globals.occlusion_threshold = args.occlusion_threshold
+    roop.globals.side_pose_adjust = args.side_pose_adjust
+    roop.globals.face_tracking = args.face_tracking
+    roop.globals.max_faces = args.max_faces
+    roop.globals.refine_landmarks = args.refine_landmarks
+    roop.globals.deform_threshold = args.deform_threshold
+    roop.globals.mouth_mask = args.mouth_mask
+    roop.globals.erode_mask = args.erode_mask
+    roop.globals.enhance_faces = args.enhance_faces
 
 
 def encode_execution_providers(execution_providers: List[str]) -> List[str]:
