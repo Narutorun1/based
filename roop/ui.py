@@ -1,3 +1,5 @@
+# ui.py
+
 import os
 import sys
 import webbrowser
@@ -12,7 +14,7 @@ import roop.metadata
 from roop.face_analyser import get_one_face
 from roop.capturer import get_video_frame, get_video_frame_total
 from roop.face_reference import get_face_reference, set_face_reference, clear_face_reference
-from roop.predictor import predict_frame, clear_predictor
+from roop.predictor import get_landmarks, clear_predictor  # Updated to use landmark predictor
 from roop.processors.frame.core import get_frame_processors_modules
 from roop.utilities import is_image, is_video, resolve_relative_path
 
@@ -34,13 +36,11 @@ source_label = None
 target_label = None
 status_label = None
 
-
 # todo: remove by native support -> https://github.com/TomSchimansky/CustomTkinter/issues/934
 class CTk(ctk.CTk, TkinterDnD.DnDWrapper):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.TkdndVersion = TkinterDnD._require(self)
-
 
 def init(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     global ROOT, PREVIEW
@@ -49,7 +49,6 @@ def init(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     PREVIEW = create_preview(ROOT)
 
     return ROOT
-
 
 def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     global source_label, target_label, status_label
@@ -84,33 +83,62 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     target_button = ctk.CTkButton(root, text='Select a target', cursor='hand2', command=lambda: select_target_path())
     target_button.place(relx=0.6, rely=0.4, relwidth=0.3, relheight=0.1)
 
-    keep_fps_value = ctk.BooleanVar(value=roop.globals.keep_fps)
-    keep_fps_checkbox = ctk.CTkSwitch(root, text='Keep target fps', variable=keep_fps_value, cursor='hand2', command=lambda: setattr(roop.globals, 'keep_fps', not roop.globals.keep_fps))
-    keep_fps_checkbox.place(relx=0.1, rely=0.6)
+    # Existing switches
+    keep_fps_value = ctk.BooleanVar(value=roop.globals.keep_fps if roop.globals.keep_fps is not None else False)
+    keep_fps_checkbox = ctk.CTkSwitch(root, text='Keep target fps', variable=keep_fps_value, cursor='hand2', command=lambda: setattr(roop.globals, 'keep_fps', keep_fps_value.get()))
+    keep_fps_checkbox.place(relx=0.1, rely=0.55)
 
-    keep_frames_value = ctk.BooleanVar(value=roop.globals.keep_frames)
+    keep_frames_value = ctk.BooleanVar(value=roop.globals.keep_frames if roop.globals.keep_frames is not None else False)
     keep_frames_switch = ctk.CTkSwitch(root, text='Keep temporary frames', variable=keep_frames_value, cursor='hand2', command=lambda: setattr(roop.globals, 'keep_frames', keep_frames_value.get()))
-    keep_frames_switch.place(relx=0.1, rely=0.65)
+    keep_frames_switch.place(relx=0.1, rely=0.60)
 
-    skip_audio_value = ctk.BooleanVar(value=roop.globals.skip_audio)
+    skip_audio_value = ctk.BooleanVar(value=roop.globals.skip_audio if roop.globals.skip_audio is not None else False)
     skip_audio_switch = ctk.CTkSwitch(root, text='Skip target audio', variable=skip_audio_value, cursor='hand2', command=lambda: setattr(roop.globals, 'skip_audio', skip_audio_value.get()))
-    skip_audio_switch.place(relx=0.6, rely=0.6)
+    skip_audio_switch.place(relx=0.6, rely=0.55)
 
-    many_faces_value = ctk.BooleanVar(value=roop.globals.many_faces)
+    many_faces_value = ctk.BooleanVar(value=roop.globals.many_faces if roop.globals.many_faces is not None else False)
     many_faces_switch = ctk.CTkSwitch(root, text='Many faces', variable=many_faces_value, cursor='hand2', command=lambda: setattr(roop.globals, 'many_faces', many_faces_value.get()))
-    many_faces_switch.place(relx=0.6, rely=0.65)
+    many_faces_switch.place(relx=0.6, rely=0.60)
+
+    # New switches for glitch mitigation
+    side_pose_adjust_value = ctk.BooleanVar(value=roop.globals.side_pose_adjust if roop.globals.side_pose_adjust is not None else False)
+    side_pose_adjust_switch = ctk.CTkSwitch(root, text='Adjust side pose', variable=side_pose_adjust_value, cursor='hand2', command=lambda: setattr(roop.globals, 'side_pose_adjust', side_pose_adjust_value.get()))
+    side_pose_adjust_switch.place(relx=0.1, rely=0.65)
+
+    refine_landmarks_value = ctk.BooleanVar(value=roop.globals.refine_landmarks if roop.globals.refine_landmarks is not None else False)
+    refine_landmarks_switch = ctk.CTkSwitch(root, text='Refine landmarks', variable=refine_landmarks_value, cursor='hand2', command=lambda: setattr(roop.globals, 'refine_landmarks', refine_landmarks_value.get()))
+    refine_landmarks_switch.place(relx=0.1, rely=0.70)
+
+    mouth_mask_value = ctk.BooleanVar(value=roop.globals.mouth_mask if roop.globals.mouth_mask is not None else False)
+    mouth_mask_switch = ctk.CTkSwitch(root, text='Mouth mask', variable=mouth_mask_value, cursor='hand2', command=lambda: setattr(roop.globals, 'mouth_mask', mouth_mask_value.get()))
+    mouth_mask_switch.place(relx=0.6, rely=0.65)
+
+    enhance_faces_value = ctk.BooleanVar(value=roop.globals.enhance_faces if roop.globals.enhance_faces is not None else False)
+    enhance_faces_switch = ctk.CTkSwitch(root, text='Enhance faces', variable=enhance_faces_value, cursor='hand2', command=lambda: setattr(roop.globals, 'enhance_faces', enhance_faces_value.get()))
+    enhance_faces_switch.place(relx=0.6, rely=0.70)
+
+    # Sliders for numerical options
+    deform_threshold_value = ctk.DoubleVar(value=roop.globals.deform_threshold if roop.globals.deform_threshold is not None else 0.3)
+    deform_threshold_slider = ctk.CTkSlider(root, from_=0.0, to=1.0, variable=deform_threshold_value, command=lambda value: setattr(roop.globals, 'deform_threshold', float(value)))
+    deform_threshold_slider.place(relx=0.1, rely=0.75, relwidth=0.3)
+    ctk.CTkLabel(root, text='Deform Threshold').place(relx=0.1, rely=0.80)
+
+    erode_mask_value = ctk.DoubleVar(value=roop.globals.erode_mask if roop.globals.erode_mask is not None else 0.2)
+    erode_mask_slider = ctk.CTkSlider(root, from_=0.0, to=1.0, variable=erode_mask_value, command=lambda value: setattr(roop.globals, 'erode_mask', float(value)))
+    erode_mask_slider.place(relx=0.6, rely=0.75, relwidth=0.3)
+    ctk.CTkLabel(root, text='Erode Mask').place(relx=0.6, rely=0.80)
 
     start_button = ctk.CTkButton(root, text='Start', cursor='hand2', command=lambda: select_output_path(start))
-    start_button.place(relx=0.15, rely=0.75, relwidth=0.2, relheight=0.05)
+    start_button.place(relx=0.15, rely=0.85, relwidth=0.2, relheight=0.05)
 
     stop_button = ctk.CTkButton(root, text='Destroy', cursor='hand2', command=lambda: destroy())
-    stop_button.place(relx=0.4, rely=0.75, relwidth=0.2, relheight=0.05)
+    stop_button.place(relx=0.4, rely=0.85, relwidth=0.2, relheight=0.05)
 
     preview_button = ctk.CTkButton(root, text='Preview', cursor='hand2', command=lambda: toggle_preview())
-    preview_button.place(relx=0.65, rely=0.75, relwidth=0.2, relheight=0.05)
+    preview_button.place(relx=0.65, rely=0.85, relwidth=0.2, relheight=0.05)
 
     status_label = ctk.CTkLabel(root, text=None, justify='center')
-    status_label.place(relx=0.1, rely=0.9, relwidth=0.8)
+    status_label.place(relx=0.1, rely=0.90, relwidth=0.8)
 
     donate_label = ctk.CTkLabel(root, text='^_^ Donate to project ^_^', justify='center', cursor='hand2')
     donate_label.place(relx=0.1, rely=0.95, relwidth=0.8)
@@ -118,7 +146,6 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     donate_label.bind('<Button>', lambda event: webbrowser.open('https://github.com/sponsors/s0md3v'))
 
     return root
-
 
 def create_preview(parent: ctk.CTkToplevel) -> ctk.CTkToplevel:
     global preview_label, preview_slider
@@ -138,11 +165,9 @@ def create_preview(parent: ctk.CTkToplevel) -> ctk.CTkToplevel:
     preview.bind('<Down>', lambda event: update_face_reference(-1))
     return preview
 
-
 def update_status(text: str) -> None:
     status_label.configure(text=text)
     ROOT.update()
-
 
 def select_source_path(source_path: Optional[str] = None) -> None:
     global RECENT_DIRECTORY_SOURCE
@@ -159,7 +184,6 @@ def select_source_path(source_path: Optional[str] = None) -> None:
     else:
         roop.globals.source_path = None
         source_label.configure(image=None)
-
 
 def select_target_path(target_path: Optional[str] = None) -> None:
     global RECENT_DIRECTORY_TARGET
@@ -183,7 +207,6 @@ def select_target_path(target_path: Optional[str] = None) -> None:
         roop.globals.target_path = None
         target_label.configure(image=None)
 
-
 def select_output_path(start: Callable[[], None]) -> None:
     global RECENT_DIRECTORY_OUTPUT
 
@@ -198,13 +221,11 @@ def select_output_path(start: Callable[[], None]) -> None:
         RECENT_DIRECTORY_OUTPUT = os.path.dirname(roop.globals.output_path)
         start()
 
-
 def render_image_preview(image_path: str, size: Tuple[int, int]) -> ctk.CTkImage:
     image = Image.open(image_path)
     if size:
         image = ImageOps.fit(image, size, Image.LANCZOS)
     return ctk.CTkImage(image, size=image.size)
-
 
 def render_video_preview(video_path: str, size: Tuple[int, int], frame_number: int = 0) -> ctk.CTkImage:
     capture = cv2.VideoCapture(video_path)
@@ -219,7 +240,6 @@ def render_video_preview(video_path: str, size: Tuple[int, int], frame_number: i
     capture.release()
     cv2.destroyAllWindows()
 
-
 def toggle_preview() -> None:
     if PREVIEW.state() == 'normal':
         PREVIEW.unbind('<Right>')
@@ -230,7 +250,6 @@ def toggle_preview() -> None:
         init_preview()
         update_preview(roop.globals.reference_frame_number)
         PREVIEW.deiconify()
-
 
 def init_preview() -> None:
     PREVIEW.title('Preview [ ↕ Reference face ]')
@@ -246,38 +265,38 @@ def init_preview() -> None:
         preview_slider.pack(fill='x')
         preview_slider.set(roop.globals.reference_frame_number)
 
-
 def update_preview(frame_number: int = 0) -> None:
     if roop.globals.source_path and roop.globals.target_path:
         temp_frame = get_video_frame(roop.globals.target_path, frame_number)
-        if predict_frame(temp_frame):
-            sys.exit()
-        source_face = get_one_face(cv2.imread(roop.globals.source_path))
-        if not get_face_reference():
-            reference_frame = get_video_frame(roop.globals.target_path, roop.globals.reference_frame_number)
-            reference_face = get_one_face(reference_frame, roop.globals.reference_face_position)
-            set_face_reference(reference_face)
-        else:
-            reference_face = get_face_reference()
-        for frame_processor in get_frame_processors_modules(roop.globals.frame_processors):
-            temp_frame = frame_processor.process_frame(
-                source_face,
-                reference_face,
-                temp_frame
-            )
-        image = Image.fromarray(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB))
-        image = ImageOps.contain(image, (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT), Image.LANCZOS)
-        image = ctk.CTkImage(image, size=image.size)
-        preview_label.configure(image=image)
-
+        if temp_frame is not None:
+            source_face = get_one_face(cv2.imread(roop.globals.source_path))
+            if not get_face_reference():
+                reference_frame = get_video_frame(roop.globals.target_path, roop.globals.reference_frame_number)
+                reference_face = get_one_face(reference_frame, roop.globals.reference_face_position)
+                set_face_reference(reference_face)
+            else:
+                reference_face = get_face_reference()
+            # Use landmarks instead of predict_frame for preview processing
+            landmarks = get_landmarks(temp_frame, roop.globals.refine_landmarks, roop.globals.deform_threshold, roop.globals.mouth_mask)
+            if landmarks.any():  # Proceed only if landmarks are valid
+                for frame_processor in get_frame_processors_modules(roop.globals.frame_processors):
+                    temp_frame = frame_processor.process_frame(
+                        source_face,
+                        reference_face,
+                        temp_frame,
+                        landmarks=landmarks  # Pass landmarks if required by processor
+                    )
+            image = Image.fromarray(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB))
+            image = ImageOps.contain(image, (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT), Image.LANCZOS)
+            image = ctk.CTkImage(image, size=image.size)
+            preview_label.configure(image=image)
 
 def update_face_reference(steps: int) -> None:
     clear_face_reference()
     reference_frame_number = int(preview_slider.get())
-    roop.globals.reference_face_position += steps
+    roop.globals.reference_face_position = (roop.globals.reference_face_position or 0) + steps
     roop.globals.reference_frame_number = reference_frame_number
     update_preview(reference_frame_number)
-
 
 def update_frame(steps: int) -> None:
     frame_number = preview_slider.get() + steps
