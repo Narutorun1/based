@@ -1,8 +1,7 @@
 # roop/__init__.py
-
 from .run import run
 from .ui import init
-from .globals import *  # Import all globals variables
+from .globals import *
 from .predictor import get_landmarks, clear_predictor
 from .face_analyser import get_one_face
 from .capturer import get_video_frame, get_video_frame_total
@@ -22,9 +21,6 @@ __all__ = [
     'clear_face_reference',
     'get_frame_processors_modules'
 ]
-
-# Optional: Initialize globals if needed (currently handled by run.py)
-# Example: Ensure globals is populated with defaults (though run.py overrides this)
-# import os
 # if not hasattr(globals(), 'source_path'):
 #     globals.source_path = None  # Add defaults if needed
+
